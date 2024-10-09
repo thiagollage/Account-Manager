@@ -1,49 +1,64 @@
 # Account Manager
-Account Manager é uma aplicação de desktop simples para gerenciar contas de email e senhas. Foi criada por Thiago Lage.
+
+Account Manager é uma aplicação de desktop segura e eficiente para gerenciar contas e senhas. Desenvolvida por Thiago Lage, esta ferramenta oferece uma interface intuitiva para armazenar e gerenciar suas informações de login de forma segura.
 
 ## Funcionalidades
 
-- Adicionar contas (email e senha)
-- Editar contas existentes
+- Adicionar e gerenciar contas (email e senha)
+- Editar informações de contas existentes
 - Remover contas
-- Visualizar lista de contas
-- Opção para mostrar/ocultar senhas
-- Exportar lista para PDF (funcionalidade não implementada)
+- Visualizar lista de contas com opção de paginação
+- Função de busca para encontrar contas rapidamente
+- Opção para mostrar/ocultar senhas na lista
+- Exportar lista de contas para PDF
+- Backup e restauração de dados
+- Sistema de login para segurança adicional
+- Criptografia de senhas armazenadas
 
 ## Requisitos
 
 - Python 3.6+
-- tkinter
+- tkinter (geralmente vem pré-instalado com Python)
+- ttkbootstrap
 - Pillow (PIL)
+- cryptography
+- bcrypt
+- reportlab
 
 ## Instalação
 
-1. Clone este repositório:git clone github.com
-2. Navegue até o diretório do projeto:
-cd account-manager
-3. Instale as dependências:
+1. Clone este repositório:git clone github.com2. Navegue até o diretório do projeto:
+cd account-manager3. Instale as dependências:
 pip install -r requirements.txt
-
 ## Uso
 
 Para executar o programa, use o seguinte comando no terminal:
-python AccountManager.py
 
+python AccountManager.py
 ## Criando um executável
 
-Para criar um executável, você pode usar o PyInstaller. Primeiro, instale o PyInstaller:
+Para criar um executável, usamos o PyInstaller com um arquivo .spec personalizado:
 
-pip install pyinstaller
-Em seguida, use o arquivo .spec fornecido para criar o executável:
-
+1. Instale o PyInstaller:
+pip install pyinstaller2. Use o arquivo .spec fornecido para criar o executável:
 pyinstaller AccountManager.spec
 O executável será criado na pasta `dist`.
 
-- Executar Alterações: pyinstaller --onefile --windowed AccountManager.py
+## Segurança
+
+- Todas as senhas são criptografadas antes de serem armazenadas
+- O aplicativo usa um sistema de login para proteger o acesso aos dados
+- As senhas dos usuários são armazenadas usando hash bcrypt para segurança adicional
 
 ## Contribuindo
 
-Contribuições são bem-vindas! Por favor, sinta-se à vontade para submeter um Pull Request.
+Contribuições são bem-vindas! Por favor, siga estes passos:
+
+1. Faça um fork do projeto
+2. Crie uma nova branch (`git checkout -b feature/AmazingFeature`)
+3. Faça commit das suas alterações (`git commit -m 'Add some AmazingFeature'`)
+4. Faça push para a branch (`git push origin feature/AmazingFeature`)
+5. Abra um Pull Request
 
 ## Licença
 
@@ -51,5 +66,4 @@ Este projeto está licenciado sob a licença MIT. Veja o arquivo `LICENSE` para 
 
 ## Contato
 
-Thiago Lage - https://github.com/thiagollage
-Estas alterações refletem a mudança do nome do arquivo principal de account_manager.py para AccountManager.py. Certifique-se de que todos os outros arquivos e referências no seu projeto também sejam atualizados para usar o novo nome do arquivo.
+Thiago Lage - [https://github.com/thiagollage](https://github.com/thiagollage)

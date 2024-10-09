@@ -1,0 +1,32 @@
+LICENCA DE USO DO SOFTWARE ACCOUNT MANAGER
+
+Copyright (c) 2024 Thiago Lage
+
+1. CONCESSAO DE LICENCA
+Este documento concede a voce, usuario final, uma licenca nao exclusiva para usar o software Account Manager, doravante denominado SOFTWARE.
+
+2. PROPRIEDADE INTELECTUAL
+O SOFTWARE e protegido por leis de direitos autorais e tratados internacionais. Thiago Lage detem todos os direitos de propriedade intelectual relacionados ao SOFTWARE.
+
+3. RESTRICOES
+Voce nao pode:s
+a) Copiar, distribuir ou transferir o SOFTWARE ou parte dele a terceiros;
+b) Modificar, adaptar, traduzir, fazer engenharia reversa, descompilar ou desmontar o SOFTWARE;
+c) Remover ou alterar quaisquer avisos de direitos autorais do SOFTWARE.
+
+4. ISENCAO DE GARANTIAS
+O SOFTWARE e fornecido "como esta", sem garantia de qualquer especie, expressa ou implicita, incluindo, mas nao se limitando a garantias de comercializacao, adequacao a uma finalidade especifica e nao violacao.
+
+5. LIMITACAO DE RESPONSABILIDADE
+Em nenhuma circunstancia o autor sera responsavel por quaisquer danos (incluindo, sem limitacao, danos por perda de lucros ou dados, interrupcao de negocios, perda de informacoes comerciais ou qualquer outra perda pecuniaria) decorrentes do uso ou da impossibilidade de uso deste SOFTWARE.
+
+6. RESCISAO
+Esta licenca e efetiva ate que seja rescindida. Seus direitos sob esta licenca terminarao automaticamente sem aviso previo se voce nao cumprir qualquer termo desta licenca.
+
+7. LEI APLICAVEL
+Esta licenca sera regida e interpretada de acordo com as leis do Brasil.
+
+Ao usar o SOFTWARE, voce reconhece que leu e entendeu este acordo e concorda em estar vinculado por seus termos e condicoes.
+
+Para mais informacoes ou duvidas sobre esta licenca, entre em contato com:
+Thiago Lage https://github.com/thiagollage
