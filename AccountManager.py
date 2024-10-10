@@ -1,31 +1,64 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
-import tkinter.font as tkfont
 import sqlite3
 import logging
 import json
 import os
+from pathlib import Path
 from cryptography.fernet import Fernet
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
 from datetime import datetime
 import webbrowser
-import bcrypt
+from argon2 import PasswordHasher
 from PIL import Image, ImageTk
+import configparser
+from dotenv import load_dotenv
 
+# Carregar variáveis de ambiente
+load_dotenv()
+
+# Carregar configurações do arquivo config.ini
+config = configparser.ConfigParser()
+config.read('config.ini')
+
+# Definir variáveis globais
+DB_PATH = os.getenv('DB_PATH', 'accounts.db')
+ENCRYPTION_KEY_FILE = os.getenv('ENCRYPTION_KEY_FILE', 'encryption_key.key')
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+DEFAULT_THEME = config.get('General', 'theme', fallback='darkly')
+ACCOUNTS_PER_PAGE = config.getint('General', 'accounts_per_page', fallback=50)
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+
+# Definir o caminho para o arquivo de log
+log_dir = os.path.join(os.getenv('LOCALAPPDATA'), 'Thiago Lage', 'Account Manager', 'Logs')
+log_file = os.path.join(log_dir, 'account_manager.log')
+
+# Criar o diretório de logs se não existir
+Path(log_dir).mkdir(parents=True, exist_ok=True)
+
+# Configurar o logging
+logging.basicConfig(filename=log_file, level=getattr(logging, LOG_LEVEL),
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Tratamento para o modo de depuração
+if DEBUG:
+    logging.getLogger().setLevel(logging.DEBUG)
+    logging.debug("Modo de depuração ativado")
+
+# Importar ttkbootstrap se disponível
 try:
     import ttkbootstrap as ttk
     from ttkbootstrap.constants import *
+    from ttkbootstrap import Style
+    from ttkbootstrap import DEFAULT_THEME as TTK_DEFAULT_THEME
     USE_TTKBOOTSTRAP = True
 except ImportError:
     import tkinter.ttk as ttk
     USE_TTKBOOTSTRAP = False
     messagebox.showwarning("Aviso", "Módulo ttkbootstrap não encontrado. Usando ttk padrão.")
-
-logging.basicConfig(filename='account_manager.log', level=logging.DEBUG,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-
+    
 class DatabaseManager:
     def __init__(self, db_file='accounts.db'):
         self.db_file = db_file
@@ -133,12 +166,11 @@ class DatabaseManager:
             return 0
 
     def add_user(self, username, password):
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         try:
             self.cursor.execute('''
                 INSERT INTO users (username, password)
                 VALUES (?, ?)
-            ''', (username, hashed_password))
+            ''', (username, password))
             self.conn.commit()
             logging.info(f"Usuário adicionado: {username}")
             return True
@@ -146,25 +178,22 @@ class DatabaseManager:
             logging.error(f"Erro ao adicionar usuário: {e}")
             return False
 
-    def verify_user(self, username, password):
+    def get_user_password(self, username):
         try:
             self.cursor.execute('SELECT password FROM users WHERE username = ?', (username,))
             result = self.cursor.fetchone()
-            if result:
-                return bcrypt.checkpw(password.encode('utf-8'), result[0])
-            return False
+            return result[0] if result else None
         except sqlite3.Error as e:
-            logging.error(f"Erro ao verificar usuário: {e}")
-            return False
+            logging.error(f"Erro ao obter senha do usuário: {e}")
+            return None
 
     def change_user_password(self, username, new_password):
-        hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
         try:
             self.cursor.execute('''
                 UPDATE users
                 SET password = ?
                 WHERE username = ?
-            ''', (hashed_password, username))
+            ''', (new_password, username))
             self.conn.commit()
             logging.info(f"Senha alterada para o usuário: {username}")
             return True
@@ -200,51 +229,78 @@ class EncryptionManager:
         return self.fernet.decrypt(data.encode()).decode()
 
 class EditAccountWindow:
-    def __init__(self, master, account_manager, index):
+    def __init__(self, master, account_manager, account_id):
         self.master = master
         self.account_manager = account_manager
-        self.index = index
+        self.account_id = account_id
 
         self.window = tk.Toplevel(master)
         self.window.title("Editar Conta")
         self.window.geometry("400x250")
         self.window.resizable(False, False)
 
-        item = self.account_manager.tree.get_children()[index]
-        account_id, email, encrypted_password, more_info = self.account_manager.tree.item(item, "values")
+        # Centralizar a janela em relação à janela principal
+        self.window.withdraw()  # Esconde a janela temporariamente
+        self.window.update_idletasks()  # Atualiza a geometria
+        width = self.window.winfo_width()
+        height = self.window.winfo_height()
+        x = master.winfo_x() + (master.winfo_width() // 2) - (width // 2)
+        y = master.winfo_y() + (master.winfo_height() // 2) - (height // 2)
+        self.window.geometry(f'+{x}+{y}')
+        self.window.deiconify()  # Mostra a janela novamente
 
-        ttk.Label(self.window, text="ID:").grid(row=0, column=0, padx=10, pady=5, sticky="e")
-        self.id_entry = ttk.Entry(self.window, width=30)
-        self.id_entry.insert(0, account_id)
-        self.id_entry.grid(row=0, column=1, padx=10, pady=5)
-        self.id_entry.config(state='readonly')
+        account = self.account_manager.db.get_accounts(1, 1000)
+        account = next((acc for acc in account if acc[0] == account_id), None)
 
-        ttk.Label(self.window, text="Email:").grid(row=1, column=0, padx=10, pady=5, sticky="e")
-        self.email_entry = ttk.Entry(self.window, width=30)
-        self.email_entry.insert(0, email)
-        self.email_entry.grid(row=1, column=1, padx=10, pady=5)
+        if account:
+            email, encrypted_password, more_info = account[1], account[2], account[3]
 
-        ttk.Label(self.window, text="Senha:").grid(row=2, column=0, padx=10, pady=5, sticky="e")
-        self.password_entry = ttk.Entry(self.window, width=30, show="*")
-        decrypted_password = self.account_manager.encryption.decrypt(encrypted_password)
-        self.password_entry.insert(0, decrypted_password)
-        self.password_entry.grid(row=2, column=1, padx=10, pady=5)
+            ttk.Label(self.window, text="Email:").grid(row=0, column=0, padx=10, pady=5, sticky="e")
+            self.email_entry = ttk.Entry(self.window, width=30)
+            self.email_entry.insert(0, email)
+            self.email_entry.grid(row=0, column=1, padx=10, pady=5)
 
-        ttk.Label(self.window, text="Informações:").grid(row=3, column=0, padx=10, pady=5, sticky="ne")
-        self.info_text = tk.Text(self.window, width=30, height=5)
-        self.info_text.insert(tk.END, more_info)
-        self.info_text.grid(row=3, column=1, padx=10, pady=5)
+            ttk.Label(self.window, text="Senha:").grid(row=1, column=0, padx=10, pady=5, sticky="e")
+            self.password_entry = ttk.Entry(self.window, width=30, show="*")
+            decrypted_password = self.account_manager.encryption.decrypt(encrypted_password)
+            self.password_entry.insert(0, decrypted_password)
+            self.password_entry.grid(row=1, column=1, padx=10, pady=5)
 
-        save_button = ttk.Button(self.window, text="Salvar", command=self.save_changes, style="TButton")
-        save_button.grid(row=4, column=0, columnspan=2, pady=20)
+            ttk.Label(self.window, text="Informações:").grid(row=2, column=0, padx=10, pady=5, sticky="ne")
+            self.info_text = tk.Text(self.window, width=30, height=5)
+            self.info_text.insert(tk.END, more_info)
+            self.info_text.grid(row=2, column=1, padx=10, pady=5)
 
-        self.window.transient(master)
-        self.window.grab_set()
+            save_button = ttk.Button(self.window, text="Salvar", command=self.save_changes, style="TButton")
+            save_button.grid(row=3, column=0, columnspan=2, pady=20)
 
-        self.email_entry.bind("<Return>", lambda event: self.password_entry.focus())
-        self.password_entry.bind("<Return>", lambda event: self.info_text.focus())
-        self.info_text.bind("<Return>", lambda event: self.save_changes())
+            self.window.transient(master)
+            self.window.grab_set()
 
+            # Vincular a tecla Enter para salvar as alterações
+            self.window.bind('<Return>', lambda event: self.save_changes())
+
+            # Focar no primeiro campo ao abrir a janela
+            self.email_entry.focus_set()
+
+    def save_changes(self):
+        new_email = self.email_entry.get()
+        new_password = self.password_entry.get()
+        new_info = self.info_text.get("1.0", tk.END).strip()
+
+        if not new_email or not new_password:
+            messagebox.showerror("Erro", "Email e senha são obrigatórios!")
+            return
+
+        encrypted_new_password = self.account_manager.encryption.encrypt(new_password)
+        
+        if self.account_manager.db.update_account(self.account_id, new_email, encrypted_new_password, new_info):
+            messagebox.showinfo("Sucesso", "Conta atualizada com sucesso!")
+            self.window.destroy()
+            self.account_manager.refresh_accounts()
+        else:
+            messagebox.showerror("Erro", "Falha ao atualizar conta.")
+            
 class AccountManager:
     def __init__(self, master):
         self.master = master
@@ -252,7 +308,12 @@ class AccountManager:
         self.master.geometry("800x600")
 
         if USE_TTKBOOTSTRAP:
-            self.style = ttk.Style(theme='darkly')
+            try:
+                self.style = Style(theme=DEFAULT_THEME)
+            except Exception as e:
+                print(f"Erro ao carregar o tema {DEFAULT_THEME}: {e}")
+                print("Usando tema padrão do ttkbootstrap.")
+                self.style = Style(theme=TTK_DEFAULT_THEME)
         else:
             self.style = ttk.Style()
             self.style.theme_use('clam')
@@ -261,9 +322,10 @@ class AccountManager:
 
         self.db = DatabaseManager()
         self.encryption = EncryptionManager()
+        self.ph = PasswordHasher()
 
         self.current_page = 1
-        self.accounts_per_page = 50
+        self.accounts_per_page = ACCOUNTS_PER_PAGE
         self.current_user = None
 
         self.load_icon()
@@ -287,12 +349,11 @@ class AccountManager:
                 self.icon = Image.open(icon_path)
                 self.icon = self.icon.resize((150, 150), Image.LANCZOS)
                 self.icon = ImageTk.PhotoImage(self.icon)
-                print(f"Ícone carregado com sucesso: {icon_path}")
             except Exception as e:
-                print(f"Erro ao carregar o ícone: {e}")
+                logging.error(f"Erro ao carregar o ícone: {e}")
                 self.icon = None
         else:
-            print(f"Arquivo de ícone não encontrado: {icon_path}")
+            logging.warning(f"Arquivo de ícone não encontrado: {icon_path}")
             self.icon = None
 
     def show_login(self):
@@ -308,14 +369,9 @@ class AccountManager:
         if self.icon:
             icon_label = ttk.Label(center_frame, image=self.icon)
             icon_label.pack(pady=(0, 20))
-        else:
-            print("Ícone não disponível para a tela de login")
 
         login_form = ttk.Frame(center_frame)
         login_form.pack()
-
-        style = ttk.Style()
-        style.configure("Placeholder.TEntry", foreground="gray")
 
         self.username_entry = ttk.Entry(login_form, font=("Arial", 10), width=30, style="Placeholder.TEntry")
         self.username_entry.insert(0, "Login")
@@ -326,8 +382,8 @@ class AccountManager:
         self.password_entry = ttk.Entry(login_form, font=("Arial", 10), width=30, style="Placeholder.TEntry")
         self.password_entry.insert(0, "Senha")
         self.password_entry.pack(pady=5)
-        self.password_entry.bind("<FocusIn>", lambda e: self.on_entry_click(self.password_entry, "Senha"))
-        self.password_entry.bind("<FocusOut>", lambda e: self.on_focusout(self.password_entry, "Senha"))
+        self.password_entry.bind("<FocusIn>", lambda e: self.on_entry_click(self.password_entry, "Senha", True))
+        self.password_entry.bind("<FocusOut>", lambda e: self.on_focusout(self.password_entry, "Senha", True))
 
         button_frame = ttk.Frame(login_form)
         button_frame.pack(pady=20)
@@ -335,12 +391,9 @@ class AccountManager:
         ttk.Button(button_frame, text="Login", command=self.login, style='TButton').pack(side=tk.LEFT, padx=10)
         ttk.Button(button_frame, text="Registrar", command=self.show_register, style='TButton').pack(side=tk.LEFT, padx=10)
         
-        def open_github(event):
-            webbrowser.open_new_tab("https://github.com/thiagollage")
-
-        credits_label = ttk.Label(self.login_frame, text="by Thiago Lage", font=("Arial", 10), foreground="gray")
+        credits_label = ttk.Label(self.login_frame, text="by Thiago Lage", font=("Arial", 10), foreground="gray", cursor="hand2")
         credits_label.pack(side=tk.BOTTOM, anchor='se', padx=10, pady=10)
-        credits_label.bind("<Button-1>", open_github)
+        credits_label.bind("<Button-1>", lambda e: webbrowser.open_new_tab("https://github.com/thiagollage"))
         
         self.master.bind('<Return>', lambda event: self.login())
         
@@ -374,14 +427,9 @@ class AccountManager:
         if self.icon:
             icon_label = ttk.Label(center_frame, image=self.icon)
             icon_label.pack(pady=(0, 20))
-        else:
-            print("Ícone não disponível para a tela de registro")
 
         register_form = ttk.Frame(center_frame)
         register_form.pack()
-
-        style = ttk.Style()
-        style.configure("Placeholder.TEntry", foreground="gray")
 
         self.reg_username_entry = ttk.Entry(register_form, font=("Arial", 10), width=30, style="Placeholder.TEntry")
         self.reg_username_entry.insert(0, "Login")
@@ -403,21 +451,23 @@ class AccountManager:
 
         ttk.Button(register_form, text="Registrar", command=self.register, style='TButton').pack(pady=20)
         
-        def open_github(event):
-            webbrowser.open_new_tab("https://github.com/thiagollage")
-
-        credits_label = ttk.Label(self.login_frame, text="by Thiago Lage", font=("Arial", 10), foreground="gray")
+        credits_label = ttk.Label(self.register_frame, text="by Thiago Lage", font=("Arial", 10), foreground="gray", cursor="hand2")
         credits_label.pack(side=tk.BOTTOM, anchor='se', padx=10, pady=10)
-        credits_label.bind("<Button-1>", open_github)
+        credits_label.bind("<Button-1>", lambda e: webbrowser.open_new_tab("https://github.com/thiagollage"))
         
-        self.master.bind('<Return>', lambda event: self.login())
+        self.master.bind('<Return>', lambda event: self.register())
 
     def login(self):
         username = self.username_entry.get()
         password = self.password_entry.get()
-        if self.db.verify_user(username, password):
-            self.current_user = username
-            self.create_main_window()
+        stored_password = self.db.get_user_password(username)
+        if stored_password:
+            try:
+                self.ph.verify(stored_password, password)
+                self.current_user = username
+                self.create_main_window()
+            except Exception:
+                messagebox.showerror("Erro", "Usuário ou senha inválidos")
         else:
             messagebox.showerror("Erro", "Usuário ou senha inválidos")
 
@@ -430,9 +480,11 @@ class AccountManager:
             messagebox.showerror("Erro", "As senhas não coincidem")
             return
 
-        if self.db.add_user(username, password):
+        hashed_password = self.ph.hash(password)
+        if self.db.add_user(username, hashed_password):
             messagebox.showinfo("Sucesso", "Usuário registrado com sucesso")
-            self.show_login()
+            self.current_user = username
+            self.create_main_window()
         else:
             messagebox.showerror("Erro", "Falha ao registrar usuário")
 
@@ -472,13 +524,13 @@ class AccountManager:
         search_frame = ttk.Frame(top_frame)
         search_frame.pack(side=tk.RIGHT, padx=(0, 10))
 
+        lupa_label = ttk.Label(search_frame, text="🔍", font=("Segoe UI Emoji", 11))
+        lupa_label.pack(side=tk.LEFT, padx=(0, 5))
+
         self.search_var = tk.StringVar()
         search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=20)
         search_entry.pack(side=tk.LEFT)
         search_entry.bind("<KeyRelease>", self.perform_search)
-
-        lupa_label = ttk.Label(search_frame, text="🔍", font=("Segoe UI Emoji", 11))
-        lupa_label.pack(side=tk.LEFT, padx=(5, 0))
 
         tree_frame = ttk.Frame(self.accounts_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
@@ -490,7 +542,6 @@ class AccountManager:
         self.tree.heading("Senha", text="Senha", anchor=tk.CENTER)
         self.tree.heading("Informações", text="Informações", anchor=tk.CENTER)
         
-        # Ajustando a largura das colunas
         self.tree.column("ID", anchor=tk.CENTER, width=50)
         self.tree.column("Email", anchor=tk.CENTER, width=200)
         self.tree.column("Senha", anchor=tk.CENTER, width=100)
@@ -568,140 +619,70 @@ class AccountManager:
     def edit_selected_account(self):
         selected = self.tree.selection()
         if selected:
-            index = self.tree.index(selected[0])
-            EditAccountWindow(self.master, self, index)
+            item = self.tree.item(selected[0])
+            account_id = item['values'][0]
+            EditAccountWindow(self.master, self, account_id)
         else:
             messagebox.showwarning("Aviso", "Selecione uma conta para editar.")
            
     def on_double_click(self, event):
         item = self.tree.identify('item', event.x, event.y)
         if item:
-            values = self.tree.item(item, "values")
-            if values:
-                account_id, email, encrypted_password, more_info = values
-                
-                edit_window = tk.Toplevel(self.master)
-                edit_window.title("Editar Conta")
-                edit_window.geometry("400x250")
-                edit_window.resizable(False, False)
-
-                ttk.Label(edit_window, text="Email:").grid(row=0, column=0, padx=10, pady=5, sticky="e")
-                email_entry = ttk.Entry(edit_window, width=30)
-                email_entry.insert(0, email)
-                email_entry.grid(row=0, column=1, padx=10, pady=5)
-
-                ttk.Label(edit_window, text="Senha:").grid(row=1, column=0, padx=10, pady=5, sticky="e")
-                password_entry = ttk.Entry(edit_window, width=30, show="*")
-                decrypted_password = self.encryption.decrypt(encrypted_password)
-                password_entry.insert(0, decrypted_password)
-                password_entry.grid(row=1, column=1, padx=10, pady=5)
-
-                ttk.Label(edit_window, text="Informações:").grid(row=2, column=0, padx=10, pady=5, sticky="ne")
-                info_text = tk.Text(edit_window, width=30, height=5)
-                info_text.insert(tk.END, more_info)
-                info_text.grid(row=2, column=1, padx=10, pady=5)
-
-                def save_changes():
-                    new_email = email_entry.get()
-                    new_password = password_entry.get()
-                    new_info = info_text.get("1.0", tk.END).strip()
-
-                    if not new_email or not new_password:
-                        messagebox.showerror("Erro", "Email e senha são obrigatórios!")
-                        return
-
-                    encrypted_new_password = self.encryption.encrypt(new_password)
-                    
-                    if self.db.update_account(account_id, new_email, encrypted_new_password, new_info):
-                        messagebox.showinfo("Sucesso", "Conta atualizada com sucesso!")
-                        edit_window.destroy()
-                        self.refresh_accounts()
-                    else:
-                        messagebox.showerror("Erro", "Falha ao atualizar conta.")
-
-                save_button = ttk.Button(edit_window, text="Salvar", command=save_changes, style="TButton")
-                save_button.grid(row=3, column=0, columnspan=2, pady=20)
-
-                edit_window.transient(self.master)
-                edit_window.grab_set()
-
-                email_entry.bind("<Return>", lambda event: password_entry.focus())
-                password_entry.bind("<Return>", lambda event: info_text.focus())
-                info_text.bind("<Return>", lambda event: save_changes())
+            self.edit_selected_account()
     
     def create_settings_tab(self):
         settings_frame = ttk.Frame(self.settings_frame)
         settings_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
+        # Configurar as colunas para expandir
+        settings_frame.columnconfigure(0, weight=1)
+        settings_frame.columnconfigure(1, weight=0)
+
         # Gerenciamento de Dados
-        ttk.Label(settings_frame, text="Gerenciamento de Dados", font=("Arial", 14, "bold")).grid(row=0, column=0, pady=10, sticky="w")
-        ttk.Label(settings_frame, text="Faça backup ou exporte seus dados").grid(row=1, column=0, pady=5, sticky="w")
+        data_frame = ttk.Frame(settings_frame)
+        data_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+        data_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(data_frame, text="Gerenciamento de Dados", font=("Arial", 14, "bold")).grid(row=0, column=0, pady=(0, 5), sticky="w")
+        ttk.Label(data_frame, text="Faça backup ou exporte seus dados").grid(row=1, column=0, pady=(0, 10), sticky="w")
         
-        button_frame = ttk.Frame(settings_frame)
-        button_frame.grid(row=0, column=1, rowspan=2, padx=20, sticky="e")
+        button_frame = ttk.Frame(data_frame)
+        button_frame.grid(row=0, column=1, rowspan=2, sticky="e")
         
-        ttk.Button(button_frame, text="Backup", command=self.backup_data, style="TButton").pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Importar", command=self.backup_data, style="TButton").pack(side=tk.RIGHT, padx=5)
         ttk.Button(button_frame, text="Exportar Lista", command=self.export_json, style="TButton").pack(side=tk.RIGHT, padx=5)
 
-        ttk.Separator(settings_frame, orient='horizontal').grid(row=2, columnspan=2, sticky="ew", pady=10)
+        ttk.Separator(settings_frame, orient='horizontal').grid(row=1, columnspan=2, sticky="ew", pady=10)
 
         # Conta
-        ttk.Label(settings_frame, text="Conta", font=("Arial", 14, "bold")).grid(row=3, column=0, pady=10, sticky="w")
-        ttk.Label(settings_frame, text="Gerencie sua conta").grid(row=4, column=0, pady=5, sticky="w")
+        account_frame = ttk.Frame(settings_frame)
+        account_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+        account_frame.columnconfigure(0, weight=1)
 
-        account_button_frame = ttk.Frame(settings_frame)
-        account_button_frame.grid(row=3, column=1, rowspan=2, padx=20, sticky="e")
+        ttk.Label(account_frame, text="Conta", font=("Arial", 14, "bold")).grid(row=0, column=0, pady=(10, 5), sticky="w")
+        ttk.Label(account_frame, text="Gerencie sua conta").grid(row=1, column=0, pady=(0, 10), sticky="w")
+
+        account_button_frame = ttk.Frame(account_frame)
+        account_button_frame.grid(row=0, column=1, rowspan=2, sticky="e")
 
         ttk.Button(account_button_frame, text="Logout", command=self.logout, style="TButton").pack(side=tk.RIGHT, padx=5)
         ttk.Button(account_button_frame, text="Alterar Senha", command=self.change_password, style="TButton").pack(side=tk.RIGHT, padx=5)
 
-        ttk.Separator(settings_frame, orient='horizontal').grid(row=5, columnspan=2, sticky="ew", pady=10)
+        ttk.Separator(settings_frame, orient='horizontal').grid(row=3, columnspan=2, sticky="ew", pady=10)
 
-        # Configurar as colunas para expandir corretamente
-        settings_frame.columnconfigure(0, weight=1)
-        settings_frame.columnconfigure(1, weight=0)
-
-        # Adicionar espaço extra na parte inferior
-        settings_frame.rowconfigure(6, weight=1)
+        # Espaçador
+        settings_frame.rowconfigure(4, weight=1)
         
-        def open_github(event):
-            webbrowser.open_new_tab("https://github.com/thiagollage")
+        # Créditos centralizados
+        credits_frame = ttk.Frame(settings_frame)
+        credits_frame.grid(row=5, column=0, columnspan=2, sticky="ew")
+        credits_frame.columnconfigure(0, weight=1)
 
-        def on_enter(event):
-            link_label.config(font=("Arial", 9, "underline"))
-
-        def on_leave(event):
-            link_label.config(font=("Arial", 9))
-
-        # Direitos autorais
-        copyright_text = "©2024 THIAGO LAGE. TODOS OS DIREITOS RESERVADOS."
-        thin_font = tkfont.Font(family="Arial", size=9, weight="normal")
-
-        copyright_frame = ttk.Frame(settings_frame)
-        copyright_frame.grid(row=7, column=0, columnspan=2, pady=20, sticky="s")
-
-        copyright_label = ttk.Label(copyright_frame, 
-                                    text="© 2024",
-                                    font=thin_font,
-                                    foreground="#808080")
-        copyright_label.pack(side=tk.LEFT)
-
-        link_label = ttk.Label(copyright_frame,
-                            text="THIAGO LAGE.",
-                            font=thin_font,
-                            foreground="#808080",
-                            cursor="hand2")
-        link_label.pack(side=tk.LEFT)
-        link_label.bind("<Button-1>", open_github)
-        link_label.bind("<Enter>", on_enter)
-        link_label.bind("<Leave>", on_leave)
-
-        rest_label = ttk.Label(copyright_frame,
-                            text="TODOS OS DIREITOS RESERVADOS.",
-                            font=thin_font,
-                            foreground="#808080")
-        rest_label.pack(side=tk.LEFT)
-    
+        credits_label = ttk.Label(credits_frame, text="© 2024 THIAGO LAGE. TODOS OS DIREITOS RESERVADOS.", 
+                                font=("Arial", 9), foreground="#808080")
+        credits_label.grid(row=0, column=0, pady=20)
+        credits_label.bind("<Button-1>", lambda e: webbrowser.open_new_tab("https://github.com/thiagollage"))
+        
     def remove_account(self):
         selected = self.tree.selection()
         if not selected:
@@ -745,9 +726,13 @@ class AccountManager:
         query = self.search_var.get()
         results = self.db.search_accounts(query)
         self.tree.delete(*self.tree.get_children())
-        for result in results:
-            masked_password = '*' * len(result[2])
-            self.tree.insert("", tk.END, values=(result[0], result[1], masked_password, result[3]))
+        if results:
+            for result in results:
+                masked_password = '*' * len(result[2])
+                self.tree.insert("", tk.END, values=(result[0], result[1], masked_password, result[3]))
+        else:
+            # Inserir "Não Encontrado" centralizado
+            self.tree.insert("", tk.END, values=("", "Não Encontrado", "", ""))
 
     def toggle_password_visibility(self, event):
         region = self.tree.identify("region", event.x, event.y)
@@ -775,7 +760,7 @@ class AccountManager:
         if not file_path:
             return
 
-        accounts = self.db.get_accounts(page=1, per_page=1000000)  # Pega todas as contas
+        accounts = self.db.get_accounts(page=1, per_page=1000000)
         export_data = []
         for account in accounts:
             decrypted_password = self.encryption.decrypt(account[2])
@@ -831,59 +816,109 @@ class AccountManager:
         messagebox.showinfo("Sucesso", f"PDF exportado para {file_path}")
 
     def backup_data(self):
-        file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
+        file_path = filedialog.askopenfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            title="Selecione o arquivo JSON para importar"
+        )
         if not file_path:
             return
-
-        accounts = self.db.get_accounts(page=1, per_page=1000000)
-        backup_data = []
-        for account in accounts:
-            decrypted_password = self.encryption.decrypt(account[2])
-            backup_data.append({
-                "id": account[0],
-                "email": account[1],
-                "password": decrypted_password,
-                "more_info": account[3]
-            })
 
         try:
             with open(file_path, 'r') as f:
                 backup_data = json.load(f)
 
+            # Limpar a tabela atual
             self.db.cursor.execute("DELETE FROM accounts")
 
+            # Inserir os dados do backup
             for account in backup_data:
                 encrypted_password = self.encryption.encrypt(account['password'])
                 self.db.add_account(account['email'], encrypted_password, account['more_info'])
 
             self.db.conn.commit()
-            messagebox.showinfo("Sucesso", "Dados restaurados com sucesso!")
+            messagebox.showinfo("Sucesso", "Dados importados com sucesso!")
             self.refresh_accounts()
         except Exception as e:
-            messagebox.showerror("Erro", f"Falha ao restaurar dados: {str(e)}")
-
+            messagebox.showerror("Erro", f"Falha ao importar dados: {str(e)}")
+        
     def change_password(self):
-        old_password = simpledialog.askstring("Alterar Senha", "Digite a senha atual:", show='*')
-        if not old_password:
-            return
+        change_password_window = tk.Toplevel(self.master)
+        change_password_window.title("Alterar Senha")
+        change_password_window.geometry("400x200")
+        change_password_window.resizable(False, False)
 
-        if not self.db.verify_user(self.current_user, old_password):
-            messagebox.showerror("Erro", "Senha atual incorreta")
-            return
+        # Centralizar a janela em relação à janela principal
+        change_password_window.withdraw()
+        change_password_window.update_idletasks()
+        width = change_password_window.winfo_width()
+        height = change_password_window.winfo_height()
+        x = self.master.winfo_x() + (self.master.winfo_width() // 2) - (width // 2)
+        y = self.master.winfo_y() + (self.master.winfo_height() // 2) - (height // 2)
+        change_password_window.geometry(f'+{x}+{y}')
+        change_password_window.deiconify()
 
-        new_password = simpledialog.askstring("Alterar Senha", "Digite a nova senha:", show='*')
-        if not new_password:
-            return
+        # Criar e posicionar widgets
+        ttk.Label(change_password_window, text="Senha Atual:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
+        old_password_entry = ttk.Entry(change_password_window, show="*", width=30)
+        old_password_entry.grid(row=0, column=1, padx=10, pady=10)
 
-        confirm_password = simpledialog.askstring("Alterar Senha", "Confirme a nova senha:", show='*')
-        if new_password != confirm_password:
-            messagebox.showerror("Erro", "As senhas não coincidem.")
-            return
+        ttk.Label(change_password_window, text="Nova Senha:").grid(row=1, column=0, padx=10, pady=10, sticky="e")
+        new_password_entry = ttk.Entry(change_password_window, show="*", width=30)
+        new_password_entry.grid(row=1, column=1, padx=10, pady=10)
 
-        if self.db.change_user_password(self.current_user, new_password):
-            messagebox.showinfo("Sucesso", "Senha alterada com sucesso!")
-        else:
-            messagebox.showerror("Erro", "Falha ao alterar a senha")
+        ttk.Label(change_password_window, text="Confirmar Nova Senha:").grid(row=2, column=0, padx=10, pady=10, sticky="e")
+        confirm_password_entry = ttk.Entry(change_password_window, show="*", width=30)
+        confirm_password_entry.grid(row=2, column=1, padx=10, pady=10)
+
+        def update_password():
+            old_password = old_password_entry.get()
+            new_password = new_password_entry.get()
+            confirm_password = confirm_password_entry.get()
+
+            if not old_password or not new_password or not confirm_password:
+                messagebox.showerror("Erro", "Todos os campos são obrigatórios!", parent=change_password_window)
+                return
+
+            if new_password != confirm_password:
+                messagebox.showerror("Erro", "As novas senhas não coincidem!", parent=change_password_window)
+                return
+
+            stored_password = self.db.get_user_password(self.current_user)
+            try:
+                self.ph.verify(stored_password, old_password)
+            except Exception:
+                messagebox.showerror("Erro", "Senha atual incorreta!", parent=change_password_window)
+                return
+
+            hashed_new_password = self.ph.hash(new_password)
+            if self.db.change_user_password(self.current_user, hashed_new_password):
+                messagebox.showinfo("Sucesso", "Senha alterada com sucesso!", parent=change_password_window)
+                change_password_window.destroy()
+            else:
+                messagebox.showerror("Erro", "Falha ao alterar a senha. Tente novamente.", parent=change_password_window)
+
+        update_button = ttk.Button(change_password_window, text="Atualizar Senha", command=update_password, style="TButton")
+        update_button.grid(row=3, column=0, columnspan=2, pady=20)
+
+        change_password_window.transient(self.master)
+        change_password_window.grab_set()
+
+        # Focar no primeiro campo ao abrir a janela
+        old_password_entry.focus_set()
+
+        # Vincular a tecla Enter para atualizar a senha
+        change_password_window.bind('<Return>', lambda event: update_password())
+
+        # Função para mover o foco para o próximo campo ao pressionar Enter
+        def focus_next_widget(event):
+            event.widget.tk_focusNext().focus()
+            return "break"
+
+        # Vincular a tecla Enter para mover o foco nos campos de entrada
+        old_password_entry.bind('<Return>', focus_next_widget)
+        new_password_entry.bind('<Return>', focus_next_widget)
+        confirm_password_entry.bind('<Return>', lambda event: update_password())
 
     def logout(self):
         self.current_user = None
