@@ -89,21 +89,9 @@ Section "Instalar" SecInstall
   ; Copiar arquivos visíveis
   File "icon.ico"
   File "LICENSE.txt"
-  File "config.ini"
   
-  ; Copiar arquivos ocultos
-  SetFileAttributes "$INSTDIR\.env" FILE_ATTRIBUTE_HIDDEN
-  File /oname=.env ".env"
-  SetFileAttributes "$INSTDIR\CHANGELOG.md" FILE_ATTRIBUTE_HIDDEN
-  File "CHANGELOG.md"
-  
-  ; Criar pasta docs oculta e copiar README.md
-  CreateDirectory "$INSTDIR\docs"
-  SetFileAttributes "$INSTDIR\docs" FILE_ATTRIBUTE_HIDDEN
-  File /oname=docs\README.md "docs\README.md"
-  
-  ; Criar pasta para logs
-  CreateDirectory "$LOCALAPPDATA\${COMPANYNAME}\${APPNAME}\Logs"
+  ; Copiar arquivo de configuração padrão
+  File /oname=default_config.ini "config.ini"
   
   ; Criar atalho no menu iniciar
   CreateDirectory "$SMPROGRAMS\${COMPANYNAME}"
@@ -144,13 +132,13 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\${COMPANYNAME}"
   Delete "$DESKTOP\${APPNAME}.lnk"
   
-  ; Remover pasta de logs
-  RMDir /r "$LOCALAPPDATA\${COMPANYNAME}\${APPNAME}"
-  
   ; Remover chaves do registro
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${COMPANYNAME} ${APPNAME}"
   DeleteRegKey HKLM "Software\${COMPANYNAME}\${APPNAME}"
   
   ; Remover diretório de instalação
   RMDir "$INSTDIR"
+  
+  ; Informar o usuário sobre dados que não serão removidos
+  MessageBox MB_OK|MB_ICONINFORMATION "Os dados do usuário em $LOCALAPPDATA\${COMPANYNAME}\${APPNAME} não foram removidos. Se desejar excluí-los, faça-o manualmente."
 SectionEnd

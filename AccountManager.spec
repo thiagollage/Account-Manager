@@ -116,6 +116,9 @@ if sys.platform.startswith('win'):
 elif sys.platform.startswith('darwin'):
     a.hiddenimports.append('subprocess')
 
+# Adicionar o ícone aos dados do aplicativo
+a.datas += [(icon_png, 'icon.png', 'DATA')]
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

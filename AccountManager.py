@@ -4,6 +4,7 @@ import sqlite3
 import logging
 import json
 import os
+import sys
 from pathlib import Path
 from cryptography.fernet import Fernet
 from reportlab.lib import colors
@@ -16,36 +17,91 @@ from PIL import Image, ImageTk
 import configparser
 from dotenv import load_dotenv
 
-# Carregar variáveis de ambiente
-load_dotenv()
+def get_app_dir():
+    if getattr(sys, 'frozen', False):
+        # Se for um executável criado pelo PyInstaller
+        return os.path.dirname(sys.executable)
+    else:
+        # Se for o script Python
+        return os.path.dirname(os.path.abspath(__file__))
 
-# Carregar configurações do arquivo config.ini
+def get_user_data_dir():
+    app_name = "Account Manager"
+    if sys.platform == "win32":
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders")
+        dir = winreg.QueryValueEx(key, "Local AppData")[0]
+        return os.path.join(dir, app_name)
+    elif sys.platform == "darwin":
+        return os.path.expanduser(f"~/Library/Application Support/{app_name}")
+    else:
+        return os.path.expanduser(f"~/.{app_name.lower().replace(' ', '_')}")
+
+# Diretórios da aplicação
+APP_DIR = get_app_dir()
+USER_DATA_DIR = get_user_data_dir()
+
+# Criar diretórios necessários
+os.makedirs(USER_DATA_DIR, exist_ok=True)
+
+# Configurar caminhos de arquivos
+DB_PATH = os.path.join(USER_DATA_DIR, 'accounts.db')
+ENCRYPTION_KEY_FILE = os.path.join(USER_DATA_DIR, 'encryption_key.key')
+LOG_FILE = os.path.join(USER_DATA_DIR, 'account_manager.log')
+
+# Carregar variáveis de ambiente
+load_dotenv(os.path.join(USER_DATA_DIR, '.env'))
+
+# Configurar logging
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Inserir a nova parte aqui
+DEFAULT_CONFIG_FILE = os.path.join(APP_DIR, 'default_config.ini')
+USER_CONFIG_FILE = os.path.join(USER_DATA_DIR, 'config.ini')
+
+# Carregar configurações
 config = configparser.ConfigParser()
-config.read('config.ini')
+if os.path.exists(USER_CONFIG_FILE):
+    config.read(USER_CONFIG_FILE)
+elif os.path.exists(DEFAULT_CONFIG_FILE):
+    config.read(DEFAULT_CONFIG_FILE)
+    # Salvar uma cópia no diretório do usuário
+    with open(USER_CONFIG_FILE, 'w') as configfile:
+        config.write(configfile)
+else:
+    config['General'] = {'theme': 'darkly', 'accounts_per_page': '50'}
+    with open(USER_CONFIG_FILE, 'w') as configfile:
+        config.write(configfile)
 
 # Definir variáveis globais
-DB_PATH = os.getenv('DB_PATH', 'accounts.db')
-ENCRYPTION_KEY_FILE = os.getenv('ENCRYPTION_KEY_FILE', 'encryption_key.key')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 DEFAULT_THEME = config.get('General', 'theme', fallback='darkly')
 ACCOUNTS_PER_PAGE = config.getint('General', 'accounts_per_page', fallback=50)
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 
-# Definir o caminho para o arquivo de log
-log_dir = os.path.join(os.getenv('LOCALAPPDATA'), 'Thiago Lage', 'Account Manager', 'Logs')
-log_file = os.path.join(log_dir, 'account_manager.log')
+# Configurar nível de log
+logging.getLogger().setLevel(getattr(logging, LOG_LEVEL))
 
-# Criar o diretório de logs se não existir
-Path(log_dir).mkdir(parents=True, exist_ok=True)
-
-# Configurar o logging
-logging.basicConfig(filename=log_file, level=getattr(logging, LOG_LEVEL),
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Tratamento para o modo de depuração
 if DEBUG:
-    logging.getLogger().setLevel(logging.DEBUG)
     logging.debug("Modo de depuração ativado")
+
+# Função para verificar permissões
+def check_permissions():
+    try:
+        test_file = os.path.join(USER_DATA_DIR, 'test.txt')
+        with open(test_file, 'w') as f:
+            f.write('test')
+        os.remove(test_file)
+        return True
+    except Exception as e:
+        logging.error(f"Falha na verificação de permissões: {str(e)}")
+        return False
+
+# Verificar permissões no início do programa
+if not check_permissions():
+    messagebox.showerror("Erro de Permissão", "O programa não tem as permissões necessárias para acessar seus dados. Por favor, contate o suporte.")
+    sys.exit(1)
 
 # Importar ttkbootstrap se disponível
 try:
@@ -58,15 +114,16 @@ except ImportError:
     import tkinter.ttk as ttk
     USE_TTKBOOTSTRAP = False
     messagebox.showwarning("Aviso", "Módulo ttkbootstrap não encontrado. Usando ttk padrão.")
-    
+
 class DatabaseManager:
-    def __init__(self, db_file='accounts.db'):
-        self.db_file = db_file
+    def __init__(self):
+        self.db_file = os.path.join(USER_DATA_DIR, 'accounts.db')
         self.conn = None
         self.cursor = None
         self.connect()
         self.create_tables()
-       
+
+
     def connect(self):
         try:
             self.conn = sqlite3.connect(self.db_file)
@@ -74,6 +131,8 @@ class DatabaseManager:
             logging.info("Conexão com o banco de dados estabelecida")
         except sqlite3.Error as e:
             logging.error(f"Erro ao conectar ao banco de dados: {e}")
+            messagebox.showerror("Erro de Banco de Dados", f"Não foi possível conectar ao banco de dados: {e}")
+
 
     def create_tables(self):
         try:
@@ -207,8 +266,8 @@ class DatabaseManager:
             logging.info("Conexão com o banco de dados fechada")
 
 class EncryptionManager:
-    def __init__(self, key_file='encryption_key.key'):
-        self.key_file = key_file
+    def __init__(self):
+        self.key_file = os.path.join(USER_DATA_DIR, 'encryption_key.key')
         self.key = self.load_or_generate_key()
         self.fernet = Fernet(self.key)
 
@@ -311,8 +370,7 @@ class AccountManager:
             try:
                 self.style = Style(theme=DEFAULT_THEME)
             except Exception as e:
-                print(f"Erro ao carregar o tema {DEFAULT_THEME}: {e}")
-                print("Usando tema padrão do ttkbootstrap.")
+                logging.error(f"Erro ao carregar o tema {DEFAULT_THEME}: {e}")
                 self.style = Style(theme=TTK_DEFAULT_THEME)
         else:
             self.style = ttk.Style()
@@ -755,7 +813,8 @@ class AccountManager:
         file_path = filedialog.asksaveasfilename(
             defaultextension=".json",
             filetypes=[("JSON files", "*.json")],
-            initialfile=default_filename
+            initialfile=default_filename,
+            initialdir=USER_DATA_DIR
         )
         if not file_path:
             return
@@ -781,7 +840,12 @@ class AccountManager:
     def export_pdf(self):
         current_date = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_filename = f"account_manager_export_{current_date}.pdf"
-        file_path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF files", "*.pdf")], initialfile=default_filename)
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf")],
+            initialfile=default_filename,
+            initialdir=USER_DATA_DIR
+        )
         if not file_path:
             return
         doc = SimpleDocTemplate(file_path, pagesize=letter)
@@ -819,7 +883,8 @@ class AccountManager:
         file_path = filedialog.askopenfilename(
             defaultextension=".json",
             filetypes=[("JSON files", "*.json")],
-            title="Selecione o arquivo JSON para importar"
+            title="Selecione o arquivo JSON para importar",
+            initialdir=USER_DATA_DIR
         )
         if not file_path:
             return
@@ -928,6 +993,11 @@ class AccountManager:
         self.master.mainloop()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = AccountManager(root)
-    app.run()
+    try:
+        root = tk.Tk()
+        app = AccountManager(root)
+        app.run()
+    except Exception as e:
+        logging.critical(f"Erro crítico na execução do programa: {e}")
+        messagebox.showerror("Erro Crítico", f"Ocorreu um erro crítico: {e}\nO programa será encerrado.")
+        sys.exit(1)
